@@ -1,29 +1,56 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTravelStore } from '../store/useTravelStore';
-import { TRAVEL_STYLES } from '../mocks/travelStyles';
-import type { AnalysisResult } from '../utils/recommend';
+import { useApiKeyStore } from '../store/useApiKeyStore';
+import { TRAVEL_STYLES, type StyleKey } from '../mocks/travelStyles';
+import { findEnrichedDestinationById } from '../utils/destinationLookup';
 import { Button, Card, PageLayout } from '../components/common';
 import {
   DestinationCard,
   DisclaimerBox,
+  SajuSummary,
   StyleBadge,
 } from '../components/result';
+import type { RankedDestinationDto } from '../types';
+
+type SortMode = 'match' | 'distance';
 
 export default function ResultPage() {
   const navigate = useNavigate();
-  const result = useTravelStore((s) => s.result) as AnalysisResult | null;
+  const pipelineResult = useTravelStore((s) => s.pipelineResult);
+  const userInput = useTravelStore((s) => s.userInput);
+  const reset = useTravelStore((s) => s.reset);
+  const resetResultOnly = useTravelStore((s) => s.resetResultOnly);
+  const clearApiKey = useApiKeyStore((s) => s.clearApiKey);
+
+  const [sortMode, setSortMode] = useState<SortMode>('match');
 
   useEffect(() => {
-    // 직접 URL 진입 / 새로고침으로 결과가 비어있으면 입력 페이지로 되돌림
-    if (!result) {
+    if (!pipelineResult || !userInput) {
       navigate('/input', { replace: true });
     }
-  }, [result, navigate]);
+  }, [pipelineResult, userInput, navigate]);
 
-  if (!result) return null;
+  const sortedRanked = useMemo(() => {
+    if (!pipelineResult || !userInput) return [];
+    const list = pipelineResult.ranked.slice();
+    if (sortMode === 'distance') {
+      list.sort(
+        (a, b) =>
+          a.destination.travelTime[userInput.departure] -
+          b.destination.travelTime[userInput.departure],
+      );
+    } else {
+      list.sort((a, b) => b.score.total - a.score.total);
+    }
+    return list;
+  }, [pipelineResult, userInput, sortMode]);
 
-  const styles = result.selectedStyles.map((k) => TRAVEL_STYLES[k]);
+  if (!pipelineResult || !userInput) return null;
+
+  const styles: StyleKey[] = pipelineResult.selectedStyles.filter(
+    (s): s is StyleKey => s in TRAVEL_STYLES,
+  );
 
   return (
     <PageLayout background="cream">
@@ -33,21 +60,21 @@ export default function ResultPage() {
           <span className="font-semibold tracking-wide">분석 완료</span>
         </div>
         <h1 className="text-2xl font-extrabold tracking-tight text-gray-900 leading-tight">
-          당신에게 어울리는
-          <br />
-          여행 스타일
+          {pipelineResult.headline}
         </h1>
       </header>
 
       <div className="flex-1 flex flex-col gap-5 overflow-y-auto pb-8">
+        <SajuSummary saju={pipelineResult.saju} />
+
         <Card padding="lg" className="bg-white">
           <div className="flex flex-wrap gap-2 mb-3">
-            {styles.map((s) => (
-              <StyleBadge key={s.key} style={s} />
+            {styles.map((k) => (
+              <StyleBadge key={k} style={TRAVEL_STYLES[k]} />
             ))}
           </div>
           <p className="text-sm leading-relaxed text-gray-700">
-            {result.styleReason}
+            {pipelineResult.styleReason}
           </p>
         </Card>
 
@@ -56,18 +83,31 @@ export default function ResultPage() {
             <h2 className="text-base font-extrabold text-gray-900 tracking-tight">
               추천 여행지 <span className="text-gradient-primary">Top 3</span>
             </h2>
-            <span className="text-xs text-gray-500">
-              가까운 순 · 결 맞춤 순
-            </span>
+            <div className="inline-flex rounded-full bg-cream-dark p-0.5 text-[11px] font-semibold">
+              <SortToggleButton
+                active={sortMode === 'match'}
+                onClick={() => setSortMode('match')}
+              >
+                결 맞춤순
+              </SortToggleButton>
+              <SortToggleButton
+                active={sortMode === 'distance'}
+                onClick={() => setSortMode('distance')}
+              >
+                가까운순
+              </SortToggleButton>
+            </div>
           </div>
 
           <div className="flex flex-col gap-4">
-            {result.destinations.map((dest, idx) => (
-              <DestinationCard
-                key={dest.id}
+            {sortedRanked.map((r, idx) => (
+              <RankedCard
+                key={r.destination.id}
                 rank={idx + 1}
-                destination={dest}
-                reason={result.reasonsByDestination[dest.id] ?? ''}
+                ranked={r}
+                travelTimeHours={
+                  r.destination.travelTime[userInput.departure]
+                }
               />
             ))}
           </div>
@@ -81,7 +121,11 @@ export default function ResultPage() {
           variant="primary"
           size="lg"
           fullWidth
-          onClick={() => navigate('/input')}
+          onClick={() => {
+            // Keep the user input + API key, drop only the analysis result.
+            resetResultOnly();
+            navigate('/input');
+          }}
         >
           조건 바꿔서 다시 받기
         </Button>
@@ -89,11 +133,64 @@ export default function ResultPage() {
           variant="ghost"
           size="md"
           fullWidth
-          onClick={() => navigate('/')}
+          onClick={() => {
+            // Full reset: clear input, result, AND the API key.
+            reset();
+            clearApiKey();
+            navigate('/');
+          }}
         >
           처음으로
         </Button>
       </div>
     </PageLayout>
+  );
+}
+
+function SortToggleButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={[
+        'rounded-full px-3 py-1 transition-colors',
+        active
+          ? 'bg-white text-primary shadow-soft'
+          : 'text-gray-500 hover:text-gray-700',
+      ].join(' ')}
+    >
+      {children}
+    </button>
+  );
+}
+
+function RankedCard({
+  rank,
+  ranked,
+  travelTimeHours,
+}: {
+  rank: number;
+  ranked: RankedDestinationDto;
+  travelTimeHours: number;
+}) {
+  const enriched = findEnrichedDestinationById(ranked.destination.id);
+  if (!enriched) return null;
+  return (
+    <DestinationCard
+      rank={rank}
+      destination={enriched}
+      reason={ranked.reason}
+      score={ranked.score}
+      travelTimeHours={travelTimeHours}
+    />
   );
 }

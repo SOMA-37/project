@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTravelStore } from '../store/useTravelStore';
+import { useApiKeyStore } from '../store/useApiKeyStore';
 import type { BirthHour, DepartureRegion, TravelDuration, TravelRange, TravelStyle } from '../types';
 import { Button, Card, Header, PageLayout } from '../components/common';
 import {
+  ApiKeyInput,
   DateTimeInput,
   DurationSelect,
   OriginSelect,
@@ -20,7 +22,7 @@ interface FormState {
   preferredStyles: TravelStyle[];
 }
 
-const INITIAL: FormState = {
+const EMPTY: FormState = {
   birthDate: '',
   birthHour: '모름',
   departure: '',
@@ -32,13 +34,31 @@ const INITIAL: FormState = {
 export default function InputPage() {
   const navigate = useNavigate();
   const setUserInput = useTravelStore((s) => s.setUserInput);
-  const [form, setForm] = useState<FormState>(INITIAL);
+  const previousInput = useTravelStore((s) => s.userInput);
+  const apiKey = useApiKeyStore((s) => s.apiKey);
+  const setApiKey = useApiKeyStore((s) => s.setApiKey);
 
-  const isValid =
+  // Pre-fill the form when the user clicked "조건 바꿔서 다시 받기" — birthDate
+  // and birthHour stay; only travel conditions need to be edited.
+  const [form, setForm] = useState<FormState>(() => {
+    if (!previousInput) return EMPTY;
+    return {
+      birthDate: previousInput.birthDate,
+      birthHour: previousInput.birthHour,
+      departure: previousInput.departure,
+      travelRange: previousInput.travelRange,
+      travelDuration: previousInput.travelDuration,
+      preferredStyles: previousInput.preferredStyles,
+    };
+  });
+
+  const isInputValid =
     form.birthDate.length > 0 &&
     form.departure !== '' &&
     form.travelRange !== '' &&
     form.travelDuration !== '';
+  const isApiKeyValid = apiKey.trim().length >= 8;
+  const isValid = isInputValid && isApiKeyValid;
 
   const handleSubmit = () => {
     if (!isValid) return;
@@ -74,6 +94,11 @@ export default function InputPage() {
       </div>
 
       <div className="flex-1 flex flex-col gap-4 overflow-y-auto pb-6">
+        <Card>
+          <h2 className="text-sm font-bold text-primary mb-4">Solar API 연결</h2>
+          <ApiKeyInput value={apiKey} onChange={setApiKey} />
+        </Card>
+
         <Card>
           <h2 className="text-sm font-bold text-primary mb-4">사주 정보</h2>
           <DateTimeInput
@@ -127,7 +152,9 @@ export default function InputPage() {
         </Button>
         {!isValid && (
           <p className="mt-2 text-center text-xs text-gray-400">
-            생년월일·출발지·이동범위·여행기간을 모두 입력해주세요
+            {!isApiKeyValid
+              ? 'Solar API 키를 입력해주세요'
+              : '생년월일·출발지·이동범위·여행기간을 모두 입력해주세요'}
           </p>
         )}
       </div>
